@@ -1,0 +1,224 @@
+---
+title: 'Practical Machine Learning: Prediction Assignment'
+author: "Deven Pravin Shah"
+date: "04/03/2020"
+output: html_document
+---
+
+## SYNOPSYS
+
+The analysis uses data from accelerometers on the belt, forearm, arm, and dumbbell of six participants. One thing that people regularly do is quantify *how much* of a particular activity they do, but they rarely quantify *how well* they do it. The goal of this project is to predict that aspect - * how effective participants were * in doing their exercise. 
+
+[More information about the data is available from this website.](http://groupware.les.inf.puc-rio.br/har)
+
+[This is link to the training data for the project.](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+[This is link to the testing data for the project.](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+## ANALYSIS
+  
+### APPROACH - OVERVIEW
+  
+1. Load the data set and briefly learn the characteristics of the data
+2. Since the number of variables in the training data is too large, clean the data by 1) excluding variables which apparently cannot be explanatory variables, and 2) reducing variables with little information.
+3. Apply PCA to reduce the number of variables.
+4. Use cross-validation method to built a valid model; 70% of the original data is used for model building (training data) while the rest of 30% of the data is used for testing (testing data).
+5. Apply random forest method to build a model. The 'Accuracy' statistic of the model will directly correspond to the out of sample error. The expected out of sample error will be (1 - Accuracy)
+6. Check the model with the testing data set.
+7. Apply the model to estimate classes of 20 observations. 
+  
+### SETUP
+  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+  
+```
+  
+#### Reproducibility
+  
+Set the `seed` for the random number generator - `1234`.  
+
+Install these packages to reproduce results - `caret, randomForest, rpart, rpart.plot, RColorBrewer, rattle`
+  
+#### Load Packages    
+  
+```{r packages_seed}
+  
+# Load the libraries
+#  
+  
+library("caret")
+library("randomForest")
+library("rpart")
+library("rpart.plot")
+library("RColorBrewer")
+library("rattle")
+  
+set.seed(1234)
+  
+```
+  
+### GETTING DATA
+  
+  
+```{r get_data}
+
+# Assign URL for the training dataset
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"  
+
+# Assign URL for the testing dataset
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"    
+
+# Read both datasets - training dataset as well as testing dataset
+
+training <- read.csv(url(trainUrl), na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(url(testUrl), na.strings=c("NA","#DIV/0!",""))
+  
+# Quick look at the data - output is hidden using results = 'hide' option for this code chunk  
+  
+
+dim(training)  
+names(training)
+
+```
+  
+### OUTCOME VARIABLE 
+  
+Our outcome variable is `classe`, a factor variable with `5 levels`. Each factor represents a specific way participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl:
+  
+* Class A - exactly according to the specification
+* Class B - throwing the elbows to the front
+* Class C - lifting the dumbbell only halfway
+* Class D - lowering the dumbbell only halfway
+* Class E - throwing the hips to the front
+  
+```{r classe_outcome_variable}
+  
+# Use 'classe' variable for prediction
+training$classe = factor(training$classe)
+
+```
+  
+### CLEANING DATA
+  
+```{r clean_data, results = "hide"}
+  
+# Remove first seven variables don't have anything about the movements we are trying to predict. Remove those columns from both the training data, and also test cases.  
+
+training <- training[,-c(1:7)]  
+testing <- testing[,-c(1:7)]
+   
+# If more than 95% values in a column are "NA" or " ", remove those columns from further analysis
+
+ninety_five_pct_threshold <- dim(training)[1] * 0.95
+goodColumns <- !apply(training, 2, function(x) sum(is.na(x)) > ninety_five_pct_threshold  || sum(x==" ") > ninety_five_pct_threshold)
+training <- training[, goodColumns]
+
+# Remove columns where the predictor is near zero variance predictor.
+  
+badColumns <- nearZeroVar(training, saveMetrics = TRUE)
+training <- training[, !badColumns$nzv==TRUE]
+  
+  
+# Remove those columns for testing dataset as well.
+  
+testing <- testing[, goodColumns]
+testing <- testing[, !badColumns$nzv==TRUE]
+
+dim(training)
+names(training)
+  
+dim(testing)
+  
+```
+  
+### CROSS VALIDATION
+  
+Use 70% of the training data for building the model.  
+    
+```{r cross_validation}
+  
+train <- createDataPartition(y=training$classe,p=.70,list=F)
+  
+myTraining <- training[train,]
+  
+myTesting <- training[-train,]
+  
+  
+```
+  
+### PREVIEW TRAINING DATA
+  
+```{r preview_data}
+  
+plot(myTraining$classe, col= c("red", "blue", "green", "yellow", "orange"), main="Bar Plot to See Frequency for each Outcome Variable 'classe'", xlab="classe levels", ylab="Frequency")
+  
+```
+  
+  
+### PRINCIPAL COMPONENT ANALYSIS (PCA)
+  
+There are 53 variables in the data set after the cleaning. The last variavle of these 53 variables is our outcome variable 'classe'. Use principal compenent analysis to see if we can cut down number of predictor variables while still retaining most of the cumulative variance.
+  
+  
+```{r PCA}
+  
+preProc <- preProcess(myTraining[,1:52],method="pca",thresh=.8)
+dim(preProc$rotation)
+  
+preProc <- preProcess(myTraining[,1:52],method="pca",thresh=.9)
+dim(preProc$rotation)
+  
+preProc <- preProcess(myTraining[,1:52],method="pca",thresh=.95)
+dim(preProc$rotation)
+
+# 95% if variance can be retained with 25 components. We use this to cut down number of components to 25.
+  
+preProc <- preProcess(myTraining[,1:52],method="pca",pcaComp=25)
+# preProc$rotation
+
+trainingPC <- predict(preProc, myTraining[,1:52])
+  
+```
+  
+
+### RANDOM FOREST
+  
+Apply random forest method
+  
+```{r random_forest}
+  
+modelFitRF <- randomForest(myTraining$classe ~ ., data = trainingPC, do.trace = F)
+print(modelFitRF) # view results
+  
+myTestingPC <- predict(preProc,myTesting[,1:52])
+  
+confusionMatrix(myTesting$classe, predict(modelFitRF, myTestingPC))
+  
+```
+  
+### PREDICT TEST CASES
+  
+Predict the given 20 test cases using the same priciple components.
+  
+  
+```{r predict_20_different_cases}
+  
+testingPC <- predict(preProc,testing[,1:52])
+  
+testing$classe <- predict(modelFitRF, testingPC)
+  
+testing$classe
+  
+```
+  
+## SUMMARY
+
+The training data has 19622 observations, each with 160 variables. After cleaning the data, there were 53 variables. Principle Component Analysis (PCA) was able to cut down number of predictors to 25 while still retaining 95% of cumulative variance.
+  
+We used 70% of observations for building the model, the other 30% cases were used to validate the model. The build model showed overall accuracy to 97.82% for the testing set. So, the expected out of sample error rate is 2.18%.
+
+The model should be able to predict the exercise classes during weight lifting with reasonably good accuracy.
+  
+  
